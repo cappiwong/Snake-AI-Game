@@ -59,6 +59,9 @@ class SnakeGameAI:
     def play_step(self, action):
         self.frame_iteration += 1
 
+        # Save the previous head position
+        previous_head = self.head
+
         # 1. Collect user input
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -70,7 +73,7 @@ class SnakeGameAI:
         self.snake.insert(0, self.head)
 
         # 3. Check if game over
-        reward = 0
+        reward = -0.1
         game_over = False
         if self.is_collision() or self.frame_iteration > 100 * len(self.snake):
             game_over = True
@@ -78,19 +81,21 @@ class SnakeGameAI:
             return reward, game_over, self.score
 
         # 4. Place new food or just move
-        distance_to_food_before = abs(self.food.x - self.snake[1].x) + abs(self.food.y - self.snake[1].y)
-        distance_to_food_after = abs(self.food.x - self.head.x) + abs(self.food.y - self.head.y)
-
         if self.head == self.food:
             self.score += 1
             reward = 10
             self._place_food()
         else:
             self.snake.pop()
-            if distance_to_food_after < distance_to_food_before:
-                reward = 1  # Reward for moving closer to the food
-            else:
-                reward = -1  # Penalty for moving away from food
+            # if self.head == previous_head:  # Penalize self-loops
+            #     reward = -2
+            # else:
+            #     distance_to_food_before = abs(self.food.x - previous_head.x) + abs(self.food.y - previous_head.y)
+            #     distance_to_food_after = abs(self.food.x - self.head.x) + abs(self.food.y - self.head.y)
+            #     if distance_to_food_after < distance_to_food_before:
+            #         reward = 1  # Reward for getting closer
+            #     else:
+            #         reward = -1  # Penalty for moving away
 
         # 5. Update UI and clock
         self._update_ui()
@@ -98,6 +103,7 @@ class SnakeGameAI:
 
         # 6. Return game over and score
         return reward, game_over, self.score
+
 
     def is_collision(self, pt=None):
         if pt is None:
@@ -134,13 +140,13 @@ class SnakeGameAI:
         idx = clock_wise.index(self.direction)
 
         if np.array_equal(action, [1, 0, 0]):
-            new_dir = clock_wise[idx]  # no change
+            new_dir = clock_wise[idx]
         elif np.array_equal(action, [0, 1, 0]):
             next_idx = (idx + 1) % 4
-            new_dir = clock_wise[next_idx]  # right turn
+            new_dir = clock_wise[next_idx]
         else:  # [0, 0, 1]
             next_idx = (idx - 1) % 4
-            new_dir = clock_wise[next_idx]  # left turn
+            new_dir = clock_wise[next_idx]
 
         self.direction = new_dir
 

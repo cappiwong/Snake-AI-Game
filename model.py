@@ -1,111 +1,75 @@
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import torch.nn.functional as F
-import os
+import numpy as np
 
-# Double DQN
-class Linear_QNet(nn.Module):
+class NoisyLinear(nn.Module):
+    def __init__(self, in_features, out_features, std_init=0.5):
+        super(NoisyLinear, self).__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.std_init = std_init
+
+        self.weight_mu = nn.Parameter(torch.empty(out_features, in_features))
+        self.weight_sigma = nn.Parameter(torch.empty(out_features, in_features))
+        self.register_buffer("weight_epsilon", torch.empty(out_features, in_features))
+
+        self.bias_mu = nn.Parameter(torch.empty(out_features))
+        self.bias_sigma = nn.Parameter(torch.empty(out_features))
+        self.register_buffer("bias_epsilon", torch.empty(out_features))
+
+        self.reset_parameters()
+        self.reset_noise()
+
+    def reset_parameters(self):
+        mu_range = 1 / np.sqrt(self.in_features)
+        self.weight_mu.data.uniform_(-mu_range, mu_range)
+        self.weight_sigma.data.fill_(self.std_init / np.sqrt(self.in_features))
+        self.bias_mu.data.uniform_(-mu_range, mu_range)
+        self.bias_sigma.data.fill_(self.std_init / np.sqrt(self.out_features))
+
+    def reset_noise(self):
+        epsilon_in = self._scale_noise(self.in_features)
+        epsilon_out = self._scale_noise(self.out_features)
+        self.weight_epsilon.copy_(epsilon_out.outer(epsilon_in))
+        self.bias_epsilon.copy_(epsilon_out)
+
+    def forward(self, input):
+        if self.training:
+            weight = self.weight_mu + self.weight_sigma * self.weight_epsilon
+            bias = self.bias_mu + self.bias_sigma * self.bias_epsilon
+        else:
+            weight = self.weight_mu
+            bias = self.bias_mu
+        return F.linear(input, weight, bias)
+
+    @staticmethod
+    def _scale_noise(size):
+        x = torch.randn(size)
+        return x.sign().mul_(x.abs().sqrt())
+
+
+class Dueling_QNet(nn.Module):
     def __init__(self, input_size, hidden_size, output_size):
-        super().__init__()
-        # self.linear1 = nn.Linear(input_size, hidden_size)
-        self.linear1 = nn.Linear(9, hidden_size) 
-        self.linear2 = nn.Linear(hidden_size, output_size)
+        super(Dueling_QNet, self).__init__()
+        self.feature = nn.Sequential(
+            nn.Linear(input_size, hidden_size),
+            nn.ReLU()
+        )
+        self.value_stream = nn.Sequential(
+            NoisyLinear(hidden_size, hidden_size),
+            nn.ReLU(),
+            NoisyLinear(hidden_size, 1)
+        )
+        self.advantage_stream = nn.Sequential(
+            NoisyLinear(hidden_size, hidden_size),
+            nn.ReLU(),
+            NoisyLinear(hidden_size, output_size)
+        )
 
     def forward(self, x):
-        x = F.relu(self.linear1(x))
-        x = self.linear2(x)
-        return x
-
-    def save(self, file_name='model.pth'):
-        model_folder_path = './model'
-        if not os.path.exists(model_folder_path):
-            os.makedirs(model_folder_path)
-
-        file_name = os.path.join(model_folder_path, file_name)
-        torch.save(self.state_dict(), file_name)
-
-
-# class QTrainer:
-#     def __init__(self, model, lr, gamma):
-#         self.lr = lr
-#         self.gamma = gamma
-#         self.model = model
-#         self.optimizer = optim.Adam(model.parameters(), lr=self.lr)
-#         self.criterion = nn.MSELoss()
-
-#     def train_step(self, state, action, reward, next_state, done):
-#         state = torch.tensor(state, dtype=torch.float)
-#         next_state = torch.tensor(next_state, dtype=torch.float)
-#         action = torch.tensor(action, dtype=torch.long)
-#         reward = torch.tensor(reward, dtype=torch.float)
-#         # (n, x)
-
-#         if len(state.shape) == 1:
-#             # (1, x)
-#             state = torch.unsqueeze(state, 0)
-#             next_state = torch.unsqueeze(next_state, 0)
-#             action = torch.unsqueeze(action, 0)
-#             reward = torch.unsqueeze(reward, 0)
-#             done = (done, )
-
-#         # 1: predicted Q values with current state
-#         pred = self.model(state)
-
-#         target = pred.clone()
-#         for idx in range(len(done)):
-#             Q_new = reward[idx]
-#             if not done[idx]:
-#                 Q_new = reward[idx] + self.gamma * torch.max(self.model(next_state[idx]))
-
-#             target[idx][torch.argmax(action[idx]).item()] = Q_new
-    
-#         # 2: Q_new = r + y * max(next_predicted Q value) -> only do this if not done
-#         # pred.clone()
-#         # preds[argmax(action)] = Q_new
-#         self.optimizer.zero_grad()
-#         loss = self.criterion(target, pred)
-#         loss.backward()
-
-#         self.optimizer.step()
-
-class QTrainer:
-    def __init__(self, model, lr, gamma):
-        self.lr = lr
-        self.gamma = gamma
-        self.model = model
-        self.target_model = Linear_QNet(11, 256, 3)  # Target network
-        self.optimizer = optim.Adam(model.parameters(), lr=self.lr)
-        self.criterion = nn.MSELoss()
-
-    def update_target_network(self):
-        self.target_model.load_state_dict(self.model.state_dict())
-
-    def train_step(self, state, action, reward, next_state, done):
-        state = torch.tensor(state, dtype=torch.float)
-        next_state = torch.tensor(next_state, dtype=torch.float)
-        action = torch.tensor(action, dtype=torch.long)
-        reward = torch.tensor(reward, dtype=torch.float)
-
-        if len(state.shape) == 1:
-            state = torch.unsqueeze(state, 0)
-            next_state = torch.unsqueeze(next_state, 0)
-            action = torch.unsqueeze(action, 0)
-            reward = torch.unsqueeze(reward, 0)
-            done = (done,)
-
-        pred = self.model(state)
-
-        target = pred.clone()
-        for idx in range(len(done)):
-            Q_new = reward[idx]
-            if not done[idx]:
-                next_pred = self.target_model(next_state[idx])
-                Q_new = reward[idx] + self.gamma * torch.max(next_pred).item()
-
-            target[idx][torch.argmax(action[idx]).item()] = Q_new
-
-        self.optimizer.zero_grad()
-        loss = self.criterion(target, pred)
-        loss.backward()
-        self.optimizer.step()
+        x = self.feature(x)
+        value = self.value_stream(x)
+        advantage = self.advantage_stream(x)
+        q = value + advantage - advantage.mean(dim=1, keepdim=True)
+        return q
